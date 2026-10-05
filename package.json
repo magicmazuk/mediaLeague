@@ -1,0 +1,33 @@
+{
+  "name": "media-league",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Rank the films, TV shows and games you love through head-to-head matchups.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "data": "node scripts/build-media.mjs && node scripts/build-games.mjs",
+    "data:media": "node scripts/build-media.mjs",
+    "data:games": "node scripts/build-games.mjs"
+  },
+  "dependencies": {
+    "@fontsource-variable/big-shoulders-display": "^5.3.0",
+    "@fontsource/barlow": "^5.3.0",
+    "lucide-react": "^1.52.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.2",
+    "vitest": "^5.0.3"
+  }
+}
