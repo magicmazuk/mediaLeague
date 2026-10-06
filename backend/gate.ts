@@ -1,8 +1,8 @@
 import { checkSession } from './auth.js';
 import { loginPage, setupPage } from './login-page.js';
 
-/** Paths anyone can reach: signing in and out, and the "don't index this site" file. */
-const OPEN_PATHS = new Set(['/api/login', '/api/logout', '/robots.txt']);
+/** Paths anyone can reach: signing in and out, a bare health check, and the "don't index this site" file. */
+const OPEN_PATHS = new Set(['/api/login', '/api/logout', '/api/health', '/robots.txt']);
 
 const NO_STORE = { 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' };
 

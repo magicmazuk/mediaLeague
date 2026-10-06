@@ -11,12 +11,27 @@ export interface Db {
 
 let instance: Db | null | undefined;
 
+/**
+ * Hosted Postgres URLs (Neon's included) carry libpq-only options such as
+ * `channel_binding` that postgres.js would forward to the server as startup
+ * parameters, which poolers reject. Strip them and turn `sslmode` into the
+ * driver's own `ssl` option.
+ */
+export function connectionOptions(url: string) {
+  const u = new URL(url);
+  const sslmode = u.searchParams.get('sslmode');
+  for (const key of ['sslmode', 'channel_binding', 'sslrootcert', 'sslcert', 'sslkey', 'sslnegotiation']) u.searchParams.delete(key);
+  const ssl = sslmode && sslmode !== 'disable' && sslmode !== 'allow' && sslmode !== 'prefer' ? ('require' as const) : false;
+  return { url: u.toString(), ssl };
+}
+
 export function getDb(): Db | null {
   if (instance !== undefined) return instance;
   const url = process.env.DATABASE_URL ?? process.env.POSTGRES_URL;
   if (!url) return (instance = null);
   // One connection per function instance; `prepare: false` keeps it compatible with pooled (PgBouncer) URLs.
-  const sql = postgres(url, { max: 1, idle_timeout: 20, connect_timeout: 10, prepare: false });
+  const options = connectionOptions(url);
+  const sql = postgres(options.url, { ssl: options.ssl, max: 1, idle_timeout: 20, connect_timeout: 10, prepare: false });
   instance = {
     query: async <T,>(text: string, params: unknown[] = []) =>
       (await sql.unsafe(text, params as postgres.ParameterOrJSON<never>[])) as unknown as T[],

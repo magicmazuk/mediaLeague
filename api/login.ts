@@ -9,14 +9,16 @@ export async function POST(request: Request) {
   const { password, secret } = authConfig();
   if (!password) return json({ error: 'No password is set up yet. Add APP_PASSWORD in Vercel.' }, 503);
 
+  // The lockout is a nicety: if the database is unreachable, signing in must still work.
   const db = getDb();
   const ip = clientIp(request);
-  if (db && (await isLockedOut(db, ip))) return json({ error: 'Too many attempts. Wait 15 minutes and try again.' }, 429);
+  const lockedOut = db ? await isLockedOut(db, ip).catch((e) => (console.error('[login] lockout check failed', e), false)) : false;
+  if (lockedOut) return json({ error: 'Too many attempts. Wait 15 minutes and try again.' }, 429);
 
   const body = (await request.json().catch(() => null)) as { password?: unknown } | null;
   const attempt = typeof body?.password === 'string' ? body.password.slice(0, 500) : '';
   if (!attempt || !(await passwordMatches(attempt, password))) {
-    if (db) await recordFailedLogin(db, ip);
+    if (db) await recordFailedLogin(db, ip).catch((e) => console.error('[login] could not record failure', e));
     await new Promise((r) => setTimeout(r, 400)); // slow down guessing
     return json({ error: "That password isn't right." }, 401);
   }

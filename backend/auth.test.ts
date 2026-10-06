@@ -76,3 +76,19 @@ describe('gate', () => {
     expect(await gate(withCookie('/robots.txt'))).toBeNull();
   });
 });
+
+describe('database URL handling', () => {
+  it('strips libpq-only options and keeps SSL on for hosted databases', async () => {
+    const { connectionOptions } = await import('./db.js');
+    const neon = connectionOptions('postgresql://u:p@ep-x-pooler.eu-west-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require');
+    expect(neon.ssl).toBe('require');
+    expect(neon.url).toBe('postgresql://u:p@ep-x-pooler.eu-west-2.aws.neon.tech/neondb');
+    expect(connectionOptions('postgres://u:p@localhost:5432/db').ssl).toBe(false);
+    expect(connectionOptions('postgres://u:p@host/db?sslmode=verify-full&application_name=ml').url).toContain('application_name=ml');
+  });
+
+  it('leaves the health check open', async () => {
+    process.env.APP_PASSWORD = 'pw';
+    expect(await gate(withCookie('/api/health', '', 'application/json'))).toBeNull();
+  });
+});

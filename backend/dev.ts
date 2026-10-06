@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
+import * as health from '../api/health.js';
 import * as login from '../api/login.js';
 import * as logout from '../api/logout.js';
 import * as ops from '../api/ops.js';
@@ -10,6 +11,7 @@ import { gate, json } from './gate.js';
 
 type Handler = (request: Request) => Response | Promise<Response>;
 const ROUTES: Record<string, Partial<Record<string, Handler>>> = {
+  '/api/health': { GET: health.GET },
   '/api/login': { POST: login.POST },
   '/api/logout': { POST: logout.POST },
   '/api/session': { GET: session.GET },
