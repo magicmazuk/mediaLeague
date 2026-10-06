@@ -25,18 +25,22 @@ export function connectionOptions(url: string) {
   return { url: u.toString(), ssl };
 }
 
+/** A Db backed by postgres.js: the driver used on Vercel. */
+export function postgresDb(url: string): Db & { end: () => Promise<void> } {
+  // One connection per function instance; `prepare: false` keeps it compatible with pooled (PgBouncer) URLs.
+  const options = connectionOptions(url);
+  const sql = postgres(options.url, { ssl: options.ssl, max: 1, idle_timeout: 20, connect_timeout: 10, prepare: false, onnotice: () => {} });
+  return {
+    query: async <T,>(text: string, params: unknown[] = []) =>
+      (await sql.unsafe(text, params as postgres.ParameterOrJSON<never>[])) as unknown as T[],
+    end: () => sql.end(),
+  };
+}
+
 export function getDb(): Db | null {
   if (instance !== undefined) return instance;
   const url = process.env.DATABASE_URL ?? process.env.POSTGRES_URL;
-  if (!url) return (instance = null);
-  // One connection per function instance; `prepare: false` keeps it compatible with pooled (PgBouncer) URLs.
-  const options = connectionOptions(url);
-  const sql = postgres(options.url, { ssl: options.ssl, max: 1, idle_timeout: 20, connect_timeout: 10, prepare: false });
-  instance = {
-    query: async <T,>(text: string, params: unknown[] = []) =>
-      (await sql.unsafe(text, params as postgres.ParameterOrJSON<never>[])) as unknown as T[],
-  };
-  return instance;
+  return (instance = url ? postgresDb(url) : null);
 }
 
 /** Used by the local dev server and tests to plug in PGlite. */

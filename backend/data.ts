@@ -48,6 +48,12 @@ export function ensureSchema(db: Db) {
   return p;
 }
 
+/*
+ * JSON goes in as text and is cast in SQL (`$1::text::jsonb`). Binding it as jsonb
+ * directly makes postgres.js JSON-encode the already-encoded string, so Postgres
+ * receives a string scalar instead of an array of rows.
+ */
+
 /**
  * Applies a batch of operations. Every operation is idempotent: re-sending a
  * batch after a dropped connection changes nothing. Consecutive results and seen
@@ -78,7 +84,7 @@ export async function applyOps(db: Db, ops: Op[]) {
       await db.query(
         `insert into ml_matches (id, league, a, b, s, at, method, pens_a, pens_b)
          select id, league, a, b, s, at, method, pens_a, pens_b
-         from jsonb_to_recordset($1::jsonb) as x(id text, league text, a text, b text, s float8, at float8, method text, pens_a int, pens_b int)
+         from jsonb_to_recordset($1::text::jsonb) as x(id text, league text, a text, b text, s float8, at float8, method text, pens_a int, pens_b int)
          on conflict (id) do nothing`,
         [JSON.stringify(rows)],
       );
@@ -91,7 +97,7 @@ export async function applyOps(db: Db, ops: Op[]) {
       await db.query(
         `insert into ml_status (league, title_id, status, updated_at)
          select league, title_id, status, updated_at
-         from jsonb_to_recordset($1::jsonb) as x(league text, title_id text, status text, updated_at float8)
+         from jsonb_to_recordset($1::text::jsonb) as x(league text, title_id text, status text, updated_at float8)
          on conflict (league, title_id) do update
            set status = excluded.status, updated_at = excluded.updated_at
            where ml_status.updated_at <= excluded.updated_at`,
@@ -109,7 +115,7 @@ export async function applyOps(db: Db, ops: Op[]) {
         );
       } else if (op.op === 'custom.add') {
         await db.query(
-          `insert into ml_custom (league, id, data, added_at) values ($1, $2, $3::jsonb, $4)
+          `insert into ml_custom (league, id, data, added_at) values ($1, $2, $3::text::jsonb, $4)
            on conflict (league, id) do update set data = excluded.data`,
           [op.league, op.title.id, JSON.stringify(op.title), op.at],
         );
