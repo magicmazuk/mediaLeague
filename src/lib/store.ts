@@ -3,13 +3,19 @@ import { persist } from 'zustand/middleware';
 import { useMemo } from 'react';
 import { BASE_TITLES, titleIndex } from './catalog';
 import { nextPair, pairKey, replaceSide } from './matchmaker';
+import { applyOp, emitOp, opsFromData, type Op } from './ops';
 import { computeStandings, tableCertainty } from './rating';
 import type { LeagueKind, LeagueState, Match, MatchMethod, SeenStatus, Title } from './types';
+import { isObject, KINDS, matchId, sanitizeLeagueData, type LeagueData } from './validate';
 
 export const MATCHDAY_SIZE = 10;
-const KINDS: LeagueKind[] = ['movie', 'tv', 'game'];
 
-const emptyLeague = (): LeagueState => ({ status: {}, matches: [], custom: [], current: null, snapshot: {}, skipped: [] });
+const emptyLeague = (): LeagueState => ({ status: {}, matches: [], custom: [], current: null, skipped: [] });
+
+const newId = () =>
+  typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 
 // Stable title arrays per (kind, custom list) so memoised consumers don't churn.
 const titlesCache = new Map<string, { custom: Title[]; titles: Title[] }>();
@@ -32,8 +38,15 @@ export function eligibleIds(kind: LeagueKind, league: LeagueState) {
   );
 }
 
-function standingsFor(kind: LeagueKind, league: LeagueState) {
-  return computeStandings(eligibleIds(kind, league), league.matches, league.snapshot);
+/**
+ * Table positions at the start of the current matchday, for the movement arrows.
+ * Derived from the results rather than stored, so it's the same on every device.
+ */
+export function matchdaySnapshot(eligible: Set<string>, matches: Match[]): Record<string, number> {
+  const n = matches.length;
+  const start = n === 0 ? 0 : Math.floor((n - 1) / MATCHDAY_SIZE) * MATCHDAY_SIZE;
+  if (start === 0) return {};
+  return Object.fromEntries(computeStandings(eligible, matches.slice(0, start)).map((r) => [r.id, r.position]));
 }
 
 function validPair(kind: LeagueKind, league: LeagueState, pair: [string, string] | null): pair is [string, string] {
@@ -42,43 +55,9 @@ function validPair(kind: LeagueKind, league: LeagueState, pair: [string, string]
   return pair.every((id) => index.has(id) && league.status[id] !== 'unseen') && pair[0] !== pair[1];
 }
 
-const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
-const isStr = (v: unknown): v is string => typeof v === 'string';
-
-/** Rebuilds a league from untrusted JSON (a backup file), dropping anything malformed. */
-export function sanitizeLeague(kind: LeagueKind, raw: unknown): LeagueState {
-  const l = isObject(raw) ? raw : {};
-  const matches = (Array.isArray(l.matches) ? l.matches : []).filter(
-    (m): m is Match =>
-      isObject(m) && isStr(m.a) && isStr(m.b) && m.a !== m.b && typeof m.s === 'number' && m.s >= 0 && m.s <= 1 && typeof m.at === 'number',
-  );
-  const status: Record<string, SeenStatus> = {};
-  if (isObject(l.status)) for (const [id, v] of Object.entries(l.status)) if (v === 'seen' || v === 'unseen') status[id] = v;
-  const snapshot: Record<string, number> = {};
-  if (isObject(l.snapshot)) for (const [id, v] of Object.entries(l.snapshot)) if (typeof v === 'number') snapshot[id] = v;
-  const custom: Title[] = (Array.isArray(l.custom) ? l.custom : [])
-    .filter((t): t is Record<string, unknown> => isObject(t) && isStr(t.id) && isStr(t.title) && isStr(t.poster))
-    .map((t) => ({
-      id: t.id as string,
-      kind,
-      title: t.title as string,
-      year: typeof t.year === 'number' ? t.year : null,
-      endYear: typeof t.endYear === 'number' ? t.endYear : null,
-      rank: typeof t.rank === 'number' ? t.rank : 9999,
-      poster: t.poster as string,
-      background: isStr(t.background) ? t.background : null,
-      logo: isStr(t.logo) ? t.logo : null,
-      genres: Array.isArray(t.genres) ? t.genres.filter(isStr) : [],
-      credit: isStr(t.credit) ? t.credit : null,
-      creditLabel: isStr(t.creditLabel) ? t.creditLabel : '',
-      summary: isStr(t.summary) ? t.summary : '',
-      score: typeof t.score === 'number' ? t.score : null,
-      meta: isStr(t.meta) ? t.meta : null,
-      links: isObject(t.links) ? Object.fromEntries(Object.entries(t.links).filter(([, v]) => isStr(v))) : {},
-      custom: true,
-    }));
-  const skipped = (Array.isArray(l.skipped) ? l.skipped : []).filter(isStr);
-  return { status, matches, custom, current: null, snapshot, skipped };
+export interface ImportResult {
+  added: number;
+  alreadyHad: number;
 }
 
 interface Store {
@@ -95,7 +74,10 @@ interface Store {
   setStatus: (kind: LeagueKind, id: string, status: SeenStatus | null) => void;
   addCustom: (kind: LeagueKind, title: Title) => void;
   resetLeague: (kind: LeagueKind) => void;
-  importBackup: (data: unknown) => void;
+  /** Merges a backup file into your leagues. Results you already have are skipped. */
+  importBackup: (data: unknown) => ImportResult;
+  /** Replaces a league's results with the server's copy, then re-applies changes not yet sent. */
+  replaceData: (kind: LeagueKind, data: LeagueData, pending: Op[]) => void;
 }
 
 export const useStore = create<Store>()(
@@ -103,6 +85,13 @@ export const useStore = create<Store>()(
     (set, get) => {
       const update = (kind: LeagueKind, fn: (l: LeagueState) => LeagueState) =>
         set((s) => ({ leagues: { ...s.leagues, [kind]: fn(s.leagues[kind]) } }));
+
+      /** Applies a change locally and announces it for syncing. */
+      const commit = (league: LeagueState, op: Op): LeagueState => {
+        const next = applyOp(league, op);
+        if (next !== league) emitOp(op);
+        return next;
+      };
 
       const freshPair = (kind: LeagueKind, league: LeagueState, exclude: string[] = []) =>
         nextPair(titlesFor(kind, league), league, Math.random, exclude) ?? nextPair(titlesFor(kind, league), league);
@@ -125,16 +114,18 @@ export const useStore = create<Store>()(
           const pair = league.current;
           if (!validPair(kind, league, pair) || pair[0] !== shown[0] || pair[1] !== shown[1]) return false;
           const s = winner === 'draw' ? 0.5 : method === 'penalties' ? (winner === 'a' ? 0.75 : 0.25) : winner === 'a' ? 1 : 0;
-          const match: Match = { a: pair[0], b: pair[1], s, at: Date.now(), method: winner === 'draw' ? 'draw' : method, ...(pens ? { pens } : {}) };
-          // A new matchday starts: remember positions so the table can show who moved.
-          const snapshot =
-            league.matches.length % MATCHDAY_SIZE === 0
-              ? Object.fromEntries(standingsFor(kind, league).map((r) => [r.id, r.position]))
-              : league.snapshot;
-          const next: LeagueState = { ...league, matches: [...league.matches, match], snapshot };
+          const match: Match = {
+            id: newId(),
+            a: pair[0],
+            b: pair[1],
+            s,
+            at: Date.now(),
+            method: winner === 'draw' ? 'draw' : method,
+            ...(pens ? { pens } : {}),
+          };
+          const next = commit(league, { op: 'match.add', league: kind, match });
           // Don't show either of the last pair straight away if there's any alternative.
-          next.current = freshPair(kind, next, pair);
-          update(kind, () => next);
+          update(kind, () => ({ ...next, current: freshPair(kind, next, pair) }));
           return true;
         },
 
@@ -144,14 +135,10 @@ export const useStore = create<Store>()(
           if (!pair) return;
           const drop = pair[side];
           const keep = pair[1 - side];
-          const status = { ...league.status, [drop]: 'unseen' as const };
-          const replacement = replaceSide(titlesFor(kind, league), { ...league, status }, keep, drop);
-          const current: [string, string] | null = replacement
-            ? side === 0
-              ? [replacement, keep]
-              : [keep, replacement]
-            : null;
-          update(kind, (l) => ({ ...l, status, current }));
+          const next = commit(league, { op: 'status.set', league: kind, titleId: drop, status: 'unseen', at: Date.now() });
+          const replacement = replaceSide(titlesFor(kind, next), next, keep, drop);
+          const current: [string, string] | null = replacement ? (side === 0 ? [replacement, keep] : [keep, replacement]) : null;
+          update(kind, () => ({ ...next, current }));
         },
 
         skip: (kind) => {
@@ -167,54 +154,86 @@ export const useStore = create<Store>()(
           const league = get().leagues[kind];
           const last = league.matches[league.matches.length - 1];
           if (!last) return undefined;
-          const matches = league.matches.slice(0, -1);
-          // Undoing the first result of a matchday: rebuild the previous matchday's baseline.
-          let snapshot = league.snapshot;
-          if (matches.length % MATCHDAY_SIZE === 0) {
-            const start = matches.length === 0 ? 0 : Math.floor((matches.length - 1) / MATCHDAY_SIZE) * MATCHDAY_SIZE;
-            const before = standingsFor(kind, { ...league, matches: matches.slice(0, start), snapshot: {} });
-            snapshot = Object.fromEntries(before.map((r) => [r.id, r.position]));
-          }
-          update(kind, (l) => ({ ...l, matches, snapshot, current: [last.a, last.b] }));
+          const next = commit(league, { op: 'match.remove', league: kind, id: matchId(last), at: Date.now() });
+          update(kind, () => ({ ...next, current: [last.a, last.b] }));
           return last;
         },
 
-        setStatus: (kind, id, status) =>
-          update(kind, (l) => {
-            const next = { ...l.status };
-            if (status) next[id] = status;
-            else delete next[id];
-            const current = l.current?.includes(id) && status === 'unseen' ? null : l.current;
-            return { ...l, status: next, current };
-          }),
+        setStatus: (kind, id, status) => {
+          const league = get().leagues[kind];
+          const next = commit(league, { op: 'status.set', league: kind, titleId: id, status, at: Date.now() });
+          const current = next.current?.includes(id) && status === 'unseen' ? null : next.current;
+          update(kind, () => ({ ...next, current }));
+        },
 
-        addCustom: (kind, title) =>
-          update(kind, (l) =>
-            titleIndex(titlesFor(kind, l)).has(title.id)
-              ? { ...l, status: { ...l.status, [title.id]: 'seen' } }
-              : { ...l, custom: [...l.custom, { ...title, custom: true }], status: { ...l.status, [title.id]: 'seen' } },
-          ),
+        addCustom: (kind, title) => {
+          const at = Date.now();
+          let next = get().leagues[kind];
+          if (!titleIndex(titlesFor(kind, next)).has(title.id)) next = commit(next, { op: 'custom.add', league: kind, title: { ...title, custom: true }, at });
+          next = commit(next, { op: 'status.set', league: kind, titleId: title.id, status: 'seen', at });
+          update(kind, () => next);
+        },
 
-        resetLeague: (kind) => update(kind, () => emptyLeague()),
+        resetLeague: (kind) => {
+          const next = commit(get().leagues[kind], { op: 'league.reset', league: kind, at: Date.now() });
+          update(kind, () => ({ ...next, current: null, skipped: [] }));
+        },
 
         importBackup: (data) => {
-          const d = data as { leagues?: Record<string, unknown> };
+          const d = data as { leagues?: unknown };
           if (!isObject(d) || !isObject(d.leagues)) throw new Error('This file is not a Media League backup.');
-          const leagues = { ...get().leagues };
+          const leagues = d.leagues;
+          const result: ImportResult = { added: 0, alreadyHad: 0 };
           for (const kind of KINDS) {
-            if (d.leagues[kind] !== undefined) leagues[kind] = sanitizeLeague(kind, d.leagues[kind]);
+            if (leagues[kind] === undefined) continue;
+            let league = get().leagues[kind];
+            for (const op of opsFromData(kind, sanitizeLeagueData(kind, leagues[kind]))) {
+              const next = commit(league, op);
+              if (op.op === 'match.add') next === league ? result.alreadyHad++ : result.added++;
+              league = next;
+            }
+            update(kind, () => league);
           }
-          set({ leagues });
+          return result;
         },
+
+        replaceData: (kind, data, pending) =>
+          update(kind, (l) => {
+            let next: LeagueState = { ...l, matches: data.matches, status: data.status, custom: data.custom };
+            for (const op of pending) if (op.league === kind) next = applyOp(next, op);
+            return next;
+          }),
       };
     },
     {
       name: 'media-league',
-      version: 1,
+      version: 2,
       partialize: (s) => ({ leagues: s.leagues, active: s.active }),
+      migrate: (persisted, version) => {
+        const state = (isObject(persisted) ? persisted : {}) as { leagues?: Record<string, unknown>; active?: LeagueKind };
+        if (version < 2) {
+          // Keep an untouched copy of the old data before changing its shape.
+          try {
+            localStorage.setItem(`media-league-v${version}-backup`, JSON.stringify(state));
+          } catch {
+            /* storage full or unavailable: carry on, the migration below is lossless */
+          }
+        }
+        const leagues = {} as Record<LeagueKind, LeagueState>;
+        for (const kind of KINDS) {
+          const raw = isObject(state.leagues) && isObject(state.leagues[kind]) ? state.leagues[kind] : {};
+          const data = sanitizeLeagueData(kind, raw);
+          const skipped = Array.isArray(raw.skipped) ? raw.skipped.filter((v): v is string => typeof v === 'string') : [];
+          leagues[kind] = { ...data, current: null, skipped };
+        }
+        return { leagues, active: KINDS.includes(state.active as LeagueKind) ? (state.active as LeagueKind) : 'movie' };
+      },
     },
   ),
 );
+
+/** A league's results, seen marks and added titles: the part that syncs. */
+export const leagueData = (l: LeagueState): LeagueData => ({ matches: l.matches, status: l.status, custom: l.custom });
 
 /** League table and headline numbers for one league, memoised on the inputs that matter. */
 export function useLeagueStats(kind: LeagueKind) {
@@ -222,7 +241,8 @@ export function useLeagueStats(kind: LeagueKind) {
   return useMemo(() => {
     const titles = titlesFor(kind, league);
     const index = titleIndex(titles);
-    const standings = standingsFor(kind, league);
+    const eligible = eligibleIds(kind, league);
+    const standings = computeStandings(eligible, league.matches, matchdaySnapshot(eligible, league.matches));
     const unseen = Object.values(league.status).filter((v) => v === 'unseen').length;
     return {
       league,

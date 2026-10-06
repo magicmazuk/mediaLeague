@@ -494,3 +494,44 @@
     padding: 14px 18px 18px;
   }
 }
+
+/* ---------- Add this device to your account ---------- */
+.modal-link {
+  width: min(560px, calc(100vw - 24px));
+}
+.link-device {
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  padding: 32px clamp(20px, 5vw, 40px) 26px;
+  text-align: center;
+  background: radial-gradient(90% 60% at 50% 0%, rgba(233, 185, 73, 0.1), transparent 70%);
+}
+.link-device-icon {
+  color: var(--gold);
+}
+.link-device h2 {
+  font-size: clamp(1.7rem, 5vw, 2.25rem);
+  text-wrap: balance;
+}
+.link-device p {
+  max-width: 46ch;
+  color: var(--text-muted);
+}
+.link-device-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.link-device-alt {
+  margin-top: 4px;
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.link-device-alt:hover {
+  color: var(--text-muted);
+}

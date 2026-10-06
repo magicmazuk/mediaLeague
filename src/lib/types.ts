@@ -29,6 +29,8 @@ export interface Title {
 export type MatchMethod = 'pick' | 'penalties' | 'draw';
 
 export interface Match {
+  /** Stable id so results can be synced and merged without duplicates. */
+  id?: string;
   a: string;
   b: string;
   /** Result from A's point of view: 1 win, 0.5 draw, 0 loss. Penalty wins are 0.75 / 0.25. */
@@ -47,8 +49,6 @@ export interface LeagueState {
   custom: Title[];
   /** The pair currently on screen, so a reload shows the same matchup. */
   current: [string, string] | null;
-  /** Ranks at the start of the current matchday; drives the movement arrows. */
-  snapshot: Record<string, number>;
   /** Recently skipped pairs, so skipping doesn't bring them straight back. */
   skipped: string[];
 }

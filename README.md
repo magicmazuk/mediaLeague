@@ -11,14 +11,30 @@ npm install
 npm run dev        # http://localhost:5173
 ```
 
-Your results are saved in the browser's local storage. Use **Export → Backup** to move them to another machine.
+Locally there's no sign-in page, and results are saved in the browser plus a built-in database in `.data/` (git-ignored). To try the sign-in page locally, copy `.env.example` to `.env.local` and set `APP_PASSWORD`.
 
 | Command | What it does |
 |---|---|
 | `npm run dev` | Start the app locally |
 | `npm test` | Run the unit tests (ranking engine, matchmaker, penalties, exports) |
-| `npm run build` | Type-check and build a static copy into `dist/` (serve it with `npm run preview`) |
+| `npm run build` | Type-check and build into `dist/` |
 | `npm run data` | Re-download the film, TV and game lists (about 5 minutes) |
+
+## Deploying with a password and a database
+
+The deployed site sits behind a password page and keeps your votes in Postgres, so every device you sign in on shares the same leagues.
+
+1. **Add a database.** In the Vercel project, open **Storage → Create Database → Neon** (Postgres, free tier) and connect it to this project for all environments. Vercel adds `DATABASE_URL` for you. Any other Postgres works too; set `DATABASE_URL` yourself.
+2. **Set a password.** In **Settings → Environment Variables**, add `APP_PASSWORD` for Production and Preview. Until it's set, the deployed site stays locked and shows a setup message.
+3. **Redeploy** (or push to `main`).
+
+The app creates its tables (`ml_*`) on first use.
+
+**What the password protects:** every page, every file and every API call goes through `middleware.ts` first. Without a valid session you get the sign-in page (or a 401 for data). Signing in sets an HttpOnly, Secure cookie for 90 days. Ten wrong passwords from one address lock it out for 15 minutes. Changing `APP_PASSWORD`, or setting the optional `SESSION_SECRET`, signs every device out. `robots.txt` and `noindex` headers keep the site out of search engines.
+
+**How syncing works:** each vote, undo, seen mark and reset is applied on the device straight away, queued, and sent to `/api/ops` about a second later. When the app comes back into view it sends anything queued, then pulls the full state from `/api/state`. Operations are idempotent and keyed by id, so votes from different devices merge; nothing is overwritten wholesale. If you're offline, changes wait in the queue.
+
+**Bringing in votes you already had:** the first time a device with existing votes signs in, the app asks whether to **add them to your account**. Adding merges them, and votes that are already there aren't duplicated. For votes in another browser, or on `localhost`, use **Export → Download backup** there, then **Export → Import a backup** on the deployed site. Importing always merges.
 
 ## How it plays
 
@@ -63,9 +79,13 @@ Letterboxd only covers films, so TV and games export as a plain CSV spreadsheet.
 ## Project layout
 
 ```
+middleware.ts   password gate (Vercel Routing Middleware)
+api/            login, logout, session, state, ops (Vercel Functions)
+backend/        auth (sessions), data (Postgres schema + sync), gate, dev (runs all of this in `npm run dev`)
 src/
   lib/          rating.ts (Bradley–Terry), matchmaker.ts, penalties.ts, export.ts,
-                store.ts (zustand + localStorage), lookup.ts (live search), catalog.ts
+                store.ts (zustand + localStorage), ops.ts + sync.ts (cloud sync), validate.ts,
+                lookup.ts (live search), catalog.ts
   components/   Arena (matchup hero), PenaltyShootout, LeagueTable, TitleGrid,
                 TitleModal, ExportPanel, AddTitle, TopNav, Poster…
   pages/        HomePage, LeaguePage
@@ -73,4 +93,4 @@ src/
 scripts/        build-media.mjs (films + TV), build-games.mjs (games)
 ```
 
-Built with Vite, React 19, TypeScript, zustand and lucide icons. The typefaces are Big Shoulders Display (stadium-signage condensed) and Barlow.
+Built with Vite, React 19, TypeScript, zustand, lucide icons, postgres.js and PGlite (local database). The typefaces are Big Shoulders Display (stadium-signage condensed) and Barlow.

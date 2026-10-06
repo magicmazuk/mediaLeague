@@ -1,9 +1,11 @@
 import { useRef, useState } from 'react';
-import { Download, ExternalLink, RotateCcw, TriangleAlert, Upload } from 'lucide-react';
+import { CloudUpload, Download, ExternalLink, LogOut, RefreshCw, RotateCcw, TriangleAlert, Upload } from 'lucide-react';
 import type { LeagueInfo } from '../lib/catalog';
-import { download, leagueTableCsv, letterboxdListCsv, letterboxdRatingsCsv } from '../lib/export';
+import { download, downloadBackup, leagueTableCsv, letterboxdListCsv, letterboxdRatingsCsv } from '../lib/export';
 import { useLeagueStats, useStore } from '../lib/store';
+import { showLinkPrompt, signOut, syncNow, useSync } from '../lib/sync';
 import { useUi } from '../lib/ui';
+import { SyncStatus } from './SyncBadge';
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -103,23 +105,26 @@ export function ExportPanel({ info }: { info: LeagueInfo }) {
         </button>
       </article>
 
-      <BackupCard info={info} />
+      <DataCard info={info} />
     </div>
   );
 }
 
-function BackupCard({ info }: { info: LeagueInfo }) {
+function DataCard({ info }: { info: LeagueInfo }) {
   const leagues = useStore((s) => s.leagues);
   const importBackup = useStore((s) => s.importBackup);
   const resetLeague = useStore((s) => s.resetLeague);
+  const sync = useSync();
   const toast = useUi((s) => s.toast);
   const fileRef = useRef<HTMLInputElement>(null);
   const [confirmReset, setConfirmReset] = useState(false);
+  const cloud = sync.mode === 'cloud' && !sync.unlinked;
 
   const restore = async (file: File) => {
     try {
-      importBackup(JSON.parse(await file.text()));
-      toast('Backup restored.');
+      const { added, alreadyHad } = importBackup(JSON.parse(await file.text()));
+      const where = cloud ? ' and synced to your account' : '';
+      toast(added ? `Imported ${added} result${added === 1 ? '' : 's'}${where}.${alreadyHad ? ` ${alreadyHad} were already here.` : ''}` : 'Nothing new in that backup: every result was already here.');
     } catch (e) {
       toast(e instanceof Error && e.message.includes('backup') ? e.message : 'That file could not be read as a Media League backup.');
     }
@@ -128,20 +133,22 @@ function BackupCard({ info }: { info: LeagueInfo }) {
   return (
     <article className="export-card">
       <div className="export-card-head">
-        <h3>Backup and restore</h3>
-        <p>Everything is saved in this browser. Download a backup to move your leagues to another device or keep them safe.</p>
+        <h3>Your data</h3>
+        <p>
+          <SyncStatus />
+        </p>
       </div>
+      {sync.unlinked && (
+        <button className="btn btn-gold" onClick={() => showLinkPrompt(true)}>
+          <CloudUpload size={16} /> Add this device's results to your account
+        </button>
+      )}
       <div className="export-row">
-        <button
-          className="btn btn-ghost"
-          onClick={() =>
-            download(`media-league-backup-${today()}.json`, JSON.stringify({ app: 'media-league', version: 1, leagues }, null, 1), 'application/json')
-          }
-        >
+        <button className="btn btn-ghost" onClick={() => downloadBackup(leagues)}>
           <Download size={16} /> Download backup
         </button>
         <button className="btn btn-ghost" onClick={() => fileRef.current?.click()}>
-          <Upload size={16} /> Restore backup
+          <Upload size={16} /> Import a backup
         </button>
         <input
           ref={fileRef}
@@ -154,11 +161,24 @@ function BackupCard({ info }: { info: LeagueInfo }) {
             e.target.value = '';
           }}
         />
+        {cloud && (
+          <button className="btn btn-quiet" onClick={() => void syncNow()} disabled={sync.phase === 'syncing'}>
+            <RefreshCw size={16} className={sync.phase === 'syncing' ? 'spin' : undefined} /> Sync now
+          </button>
+        )}
+        {sync.canSignOut && (
+          <button className="btn btn-quiet" onClick={() => void signOut()}>
+            <LogOut size={16} /> Sign out
+          </button>
+        )}
       </div>
+      <p className="export-note">Importing merges a backup into your leagues. Results you already have aren't duplicated.</p>
       <div className="export-row danger-zone">
         {confirmReset ? (
           <>
-            <p>Delete every {info.name.toLowerCase()} result and seen mark? This can't be undone.</p>
+            <p>
+              Delete every {info.name.toLowerCase()} result and seen mark{cloud ? ' from your account, on every device' : ''}? This can't be undone.
+            </p>
             <button
               className="btn btn-danger"
               onClick={() => {

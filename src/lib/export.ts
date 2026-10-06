@@ -70,3 +70,10 @@ export function download(filename: string, content: string, type = 'text/csv;cha
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+/** Everything you've voted, marked and added, as a JSON file you can import again here or on another device. */
+export function downloadBackup(leagues: Record<string, { matches: unknown[]; status: unknown; custom: unknown[] }>) {
+  const data = Object.fromEntries(Object.entries(leagues).map(([k, l]) => [k, { matches: l.matches, status: l.status, custom: l.custom }]));
+  const stamp = new Date().toISOString().slice(0, 10);
+  download(`media-league-backup-${stamp}.json`, JSON.stringify({ app: 'media-league', version: 2, exportedAt: new Date().toISOString(), leagues: data }, null, 1), 'application/json');
+}

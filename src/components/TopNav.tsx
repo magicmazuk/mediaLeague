@@ -6,6 +6,7 @@ import { useStore } from '../lib/store';
 import { useUi } from '../lib/ui';
 import type { LeagueKind, Title } from '../lib/types';
 import { Poster } from './Poster';
+import { SyncBadge } from './SyncBadge';
 
 const ICONS: Record<LeagueKind, typeof Tv> = { movie: Clapperboard, tv: Tv, game: Gamepad2 };
 
@@ -29,6 +30,7 @@ export function TopNav({ route }: { route: Route }) {
               </a>
             ))}
           </nav>
+          <SyncBadge />
           <SearchBox />
         </div>
       </header>
